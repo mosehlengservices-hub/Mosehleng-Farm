@@ -1976,7 +1976,7 @@
             
             <div class="form-group">
                 <label class="form-label">Item Name *</label>
-                <input type="text" class="form-input" id="editBud getName" placeholder="e.g., Cabbage Seeds">
+                <input type="text" class="form-input" id="editBudgetName" placeholder="e.g., Cabbage Seeds">
             </div>
 
             <div class="form-group">
@@ -2239,6 +2239,50 @@
                 lastSync: null
             };
 
+            // Utility functions
+            function debounce(func, wait) {
+                let timeout;
+                return function executedFunction(...args) {
+                    const later = () => {
+                        clearTimeout(timeout);
+                        func(...args);
+                    };
+                    clearTimeout(timeout);
+                    timeout = setTimeout(later, wait);
+                };
+            }
+
+            function formatCurrency(amount) {
+                return `R ${Number(amount).toLocaleString('en-ZA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+            }
+
+            function escapeHtml(text) {
+                const div = document.createElement('div');
+                div.textContent = text;
+                return div.innerHTML;
+            }
+
+            function getLocalDateString(date = new Date()) {
+                const d = new Date(date);
+                const offset = d.getTimezoneOffset() * 60000;
+                const localDate = new Date(d.getTime() - offset);
+                return localDate.toISOString().split('T')[0];
+            }
+
+            function calculateDateProgress(startDate, endDate) {
+                if (!startDate || !endDate) return 0;
+                const start = new Date(startDate);
+                const end = new Date(endDate);
+                const today = new Date();
+                
+                if (today < start) return 0;
+                if (today > end) return 100;
+                
+                const totalDays = Math.max(1, (end - start) / (1000 * 60 * 60 * 24));
+                const elapsedDays = (today - start) / (1000 * 60 * 60 * 24);
+                return Math.min(100, Math.round((elapsedDays / totalDays) * 100));
+            }
+
             // Initialize the application
             function init() {
                 loadData();
@@ -2249,36 +2293,53 @@
                 updateLastSyncTime();
             }
 
-            // Load data from localStorage
+            // Load data from localStorage with better error handling
             function loadData() {
-                const savedData = localStorage.getItem('farmMasterData');
-                if (savedData) {
-                    try {
+                try {
+                    const savedData = localStorage.getItem('farmMasterData');
+                    if (savedData) {
                         const parsed = JSON.parse(savedData);
-                        // Merge with default structure
                         farmData = { ...farmData, ...parsed };
-                        // Ensure arrays exist
-                        farmData.milestones = farmData.milestones || [];
-                        farmData.budgetAmendments = farmData.budgetAmendments || [];
-                        farmData.loans = farmData.loans || [];
-                        farmData.grants = farmData.grants || [];
-                        farmData.investors = farmData.investors || [];
-                    } catch (e) {
-                        console.error('Error loading saved data:', e);
-                        showNotification('Error loading saved data. Starting fresh.', 'error');
+                        
+                        // Ensure all arrays exist
+                        const arrays = [
+                            'milestones', 'budgetAmendments', 'loans', 'grants', 'investors',
+                            'cycles', 'observations', 'expenses', 'inventory', 'workers',
+                            'attendance', 'sales', 'customers', 'budget', 'tasks'
+                        ];
+                        
+                        arrays.forEach(key => {
+                            farmData[key] = farmData[key] || [];
+                        });
+                    }
+                } catch (e) {
+                    console.error('Error loading saved data:', e);
+                    showNotification('Error loading saved data. Starting with fresh data.', 'error');
+                    // Try to backup corrupted data
+                    try {
+                        localStorage.setItem('farmMasterData_backup_' + Date.now(), localStorage.getItem('farmMasterData'));
+                    } catch (backupError) {
+                        console.error('Could not backup data:', backupError);
                     }
                 }
             }
 
-            // Save data to localStorage
+            // Save data to localStorage with error handling
             function saveData() {
                 try {
                     farmData.lastSync = new Date().toISOString();
-                    localStorage.setItem('farmMasterData', JSON.stringify(farmData));
+                    
+                    // Limit data size to prevent localStorage overflow
+                    const dataToSave = JSON.stringify(farmData);
+                    if (dataToSave.length > 4.5 * 1024 * 1024) {
+                        showNotification('Warning: Data approaching storage limit. Consider exporting old data.', 'warning');
+                    }
+                    
+                    localStorage.setItem('farmMasterData', dataToSave);
                     updateLastSaveTime();
                 } catch (e) {
                     console.error('Error saving data:', e);
-                    showNotification('Error saving data', 'error');
+                    showNotification('Error saving data. Check storage space or try exporting data.', 'error');
                 }
             }
 
@@ -2286,7 +2347,8 @@
             function updateLastSaveTime() {
                 const now = new Date();
                 const timeString = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-                document.getElementById('lastSave').textContent = `Saved ${timeString}`;
+                const element = document.getElementById('lastSave');
+                if (element) element.textContent = `Saved ${timeString}`;
             }
 
             // Update last sync time
@@ -2303,10 +2365,9 @@
                 setInterval(saveData, 30000);
             }
 
-            // Set up default dates in forms
+            // Set up default dates in forms using local timezone
             function setupDefaultDates() {
-                const today = new Date();
-                const todayStr = today.toISOString().split('T')[0];
+                const todayStr = getLocalDateString();
                 
                 // Set today's date where needed
                 const dateFields = [
@@ -2325,16 +2386,16 @@
                 // Set harvest date (85 days from today)
                 const harvestDate = new Date();
                 harvestDate.setDate(harvestDate.getDate() + 85);
-                document.getElementById('harvestDate').value = harvestDate.toISOString().split('T')[0];
+                document.getElementById('harvestDate').value = getLocalDateString(harvestDate);
 
                 // Set report start date to 30 days ago
                 const reportStart = new Date();
                 reportStart.setDate(reportStart.getDate() - 30);
-                document.getElementById('reportStartDate').value = reportStart.toISOString().split('T')[0];
-                document.getElementById('financingReportStartDate').value = reportStart.toISOString().split('T')[0];
+                document.getElementById('reportStartDate').value = getLocalDateString(reportStart);
+                document.getElementById('financingReportStartDate').value = getLocalDateString(reportStart);
                 
                 // Set payroll start date to 30 days ago
-                document.getElementById('payrollStartDate').value = reportStart.toISOString().split('T')[0];
+                document.getElementById('payrollStartDate').value = getLocalDateString(reportStart);
             }
 
             // Set up all event listeners
@@ -2403,10 +2464,18 @@
                 document.getElementById('editBudgetQty')?.addEventListener('input', calculateEditBudgetTotal);
                 document.getElementById('editBudgetPrice')?.addEventListener('input', calculateEditBudgetTotal);
 
-                // Search and filter
-                document.getElementById('inventorySearch')?.addEventListener('input', filterInventory);
+                // Search and filter with debouncing
+                const inventorySearch = document.getElementById('inventorySearch');
+                const budgetSearch = document.getElementById('budgetSearch');
+                
+                if (inventorySearch) {
+                    inventorySearch.addEventListener('input', debounce(filterInventory, 300));
+                }
+                if (budgetSearch) {
+                    budgetSearch.addEventListener('input', debounce(filterBudgetItems, 300));
+                }
+                
                 document.getElementById('inventoryCategoryFilter')?.addEventListener('change', filterInventory);
-                document.getElementById('budgetSearch')?.addEventListener('input', filterBudgetItems);
                 document.getElementById('budgetFilter')?.addEventListener('change', filterBudgetItems);
                 document.getElementById('expenseFilter')?.addEventListener('change', loadRecentExpenses);
                 document.getElementById('loanFilter')?.addEventListener('change', loadLoansTable);
@@ -2436,6 +2505,8 @@
 
             // Show/hide tabs
             function showTab(container, tabId) {
+                if (!container) return;
+                
                 // Update tab buttons
                 container.querySelectorAll('.tab-btn').forEach(btn => {
                     btn.classList.remove('active');
@@ -2503,18 +2574,23 @@
                 const activeCycles = farmData.cycles.filter(c => c.status === 'active').length;
                 const todayTasks = getTodayTasksCount();
                 
-                document.getElementById('activeCyclesCount').textContent = activeCycles;
-                document.getElementById('todayTasksCount').textContent = todayTasks;
+                const activeCyclesCount = document.getElementById('activeCyclesCount');
+                const todayTasksCount = document.getElementById('todayTasksCount');
+                
+                if (activeCyclesCount) activeCyclesCount.textContent = activeCycles;
+                if (todayTasksCount) todayTasksCount.textContent = todayTasks;
             }
 
             function getTodayTasksCount() {
-                const today = new Date().toISOString().split('T')[0];
+                const today = getLocalDateString();
                 return farmData.tasks.filter(t => t.date === today && !t.completed).length;
             }
 
             function loadActiveCycles() {
                 const activeCycles = farmData.cycles.filter(c => c.status === 'active');
                 const container = document.getElementById('cyclesList');
+                
+                if (!container) return;
                 
                 if (!activeCycles.length) {
                     container.innerHTML = `
@@ -2528,11 +2604,18 @@
                 }
                 
                 container.innerHTML = activeCycles.map(cycle => {
-                    // Calculate progress based on milestones
+                    // Calculate progress based on milestones and dates
                     const cycleMilestones = farmData.milestones.filter(m => m.cycleId === cycle.id);
                     const completedMilestones = cycleMilestones.filter(m => m.status === 'completed').length;
                     const totalMilestones = cycleMilestones.length;
-                    const progress = totalMilestones > 0 ? Math.round((completedMilestones / totalMilestones) * 100) : 0;
+                    
+                    let progress = 0;
+                    if (totalMilestones > 0) {
+                        progress = Math.round((completedMilestones / totalMilestones) * 100);
+                    } else {
+                        // Fallback to date-based progress
+                        progress = calculateDateProgress(cycle.startDate, cycle.harvestDate);
+                    }
                     
                     return `
                         <div class="worker-card" style="cursor: pointer;" onclick="FarmMaster.viewCycleDetails(${cycle.id})">
@@ -2660,20 +2743,26 @@
                     return;
                 }
                 
-                container.innerHTML = cycleMilestones.map(milestone => `
-                    <div style="padding: 10px; border-bottom: 1px solid #eee;">
-                        <div style="display: flex; justify-content: space-between; align-items: start;">
-                            <div>
-                                <strong>${getMilestoneTypeName(milestone.type)}</strong>
-                                <div style="color: #666; font-size: 0.9rem;">${milestone.date}</div>
-                                <div style="margin-top: 5px;">${escapeHtml(milestone.description)}</div>
+                container.innerHTML = cycleMilestones.map(milestone => {
+                    const milestoneTypeName = getMilestoneTypeName(milestone.type);
+                    const milestoneStatusClass = getMilestoneStatusClass(milestone.status);
+                    const statusDisplay = milestone.status.replace('_', ' ');
+                    
+                    return `
+                        <div style="padding: 10px; border-bottom: 1px solid #eee;">
+                            <div style="display: flex; justify-content: space-between; align-items: start;">
+                                <div>
+                                    <strong>${milestoneTypeName}</strong>
+                                    <div style="color: #666; font-size: 0.9rem;">${milestone.date}</div>
+                                    <div style="margin-top: 5px;">${escapeHtml(milestone.description)}</div>
+                                </div>
+                                <span class="status-badge ${milestoneStatusClass}">
+                                    ${statusDisplay}
+                                </span>
                             </div>
-                            <span class="status-badge ${getMilestoneStatusClass(milestone.status)}">
-                                ${milestone.status.replace('_', ' ')}
-                            </span>
                         </div>
-                    </div>
-                `).join('');
+                    `;
+                }).join('');
             }
 
             function getMilestoneTypeName(type) {
@@ -2716,13 +2805,17 @@
                 const totalSpent = farmData.expenses.reduce((sum, exp) => sum + exp.amount, 0);
                 const remaining = Math.max(0, totalBudget - totalSpent);
                 
-                document.getElementById('totalBudget').textContent = formatCurrency(totalBudget);
-                document.getElementById('actualSpend').textContent = formatCurrency(totalSpent);
-                document.getElementById('remainingBudget').textContent = formatCurrency(remaining);
+                const totalBudgetEl = document.getElementById('totalBudget');
+                const actualSpendEl = document.getElementById('actualSpend');
+                const remainingBudgetEl = document.getElementById('remainingBudget');
+                
+                if (totalBudgetEl) totalBudgetEl.textContent = formatCurrency(totalBudget);
+                if (actualSpendEl) actualSpendEl.textContent = formatCurrency(totalSpent);
+                if (remainingBudgetEl) remainingBudgetEl.textContent = formatCurrency(remaining);
             }
 
             function loadRecentActivity() {
-                const today = new Date().toISOString().split('T')[0];
+                const today = getLocalDateString();
                 const activities = [];
                 
                 // Recent milestones
@@ -2749,6 +2842,8 @@
                     });
                 
                 const container = document.getElementById('recentActivity');
+                if (!container) return;
+                
                 if (!activities.length) {
                     container.innerHTML = `
                         <div style="text-align: center; padding: 20px; color: #666;">
@@ -2810,6 +2905,8 @@
                 }
                 
                 const container = document.getElementById('urgentActions');
+                if (!container) return;
+                
                 if (!actions.length) {
                     container.innerHTML = `
                         <div style="padding: 10px; background: #e8f5e9; border-left: 4px solid var(--success); margin-bottom: 10px; border-radius: 4px;">
@@ -2840,13 +2937,13 @@
 
             function loadNewCycleSection() {
                 // Set default dates if not already set
-                if (!document.getElementById('startDate').value) {
-                    const today = new Date().toISOString().split('T')[0];
-                    document.getElementById('startDate').value = today;
+                const startDateEl = document.getElementById('startDate');
+                if (startDateEl && !startDateEl.value) {
+                    startDateEl.value = getLocalDateString();
                     
                     const harvestDate = new Date();
                     harvestDate.setDate(harvestDate.getDate() + 85);
-                    document.getElementById('harvestDate').value = harvestDate.toISOString().split('T')[0];
+                    document.getElementById('harvestDate').value = getLocalDateString(harvestDate);
                 }
             }
 
@@ -2965,7 +3062,7 @@
                     description: description.trim(),
                     value,
                     severity,
-                    date: new Date().toISOString().split('T')[0],
+                    date: getLocalDateString(),
                     timestamp: new Date().toISOString()
                 };
                 
@@ -2983,7 +3080,7 @@
             }
 
             function loadTodayObservations() {
-                const today = new Date().toISOString().split('T')[0];
+                const today = getLocalDateString();
                 const observations = farmData.observations.filter(o => o.date === today);
                 const container = document.getElementById('todayObservations');
                 
@@ -3000,6 +3097,9 @@
                 
                 container.innerHTML = observations.map(obs => {
                     const cycle = farmData.cycles.find(c => c.id === obs.cycleId);
+                    const severityClass = `status-${obs.severity || 'low'}`;
+                    const severityDisplay = (obs.severity || 'low').toUpperCase();
+                    
                     return `
                         <div style="padding: 15px; border-bottom: 1px solid #eee;">
                             <div style="display: flex; justify-content: space-between; align-items: start;">
@@ -3009,8 +3109,8 @@
                                     <div style="color: #666; margin-top: 5px;">${escapeHtml(obs.description)}</div>
                                     ${obs.value ? `<div style="font-size: 0.9rem; color: var(--primary);">Value: ${escapeHtml(obs.value)}</div>` : ''}
                                 </div>
-                                <span class="status-badge status-${obs.severity || 'low'}">
-                                    ${(obs.severity || 'low').toUpperCase()}
+                                <span class="status-badge ${severityClass}">
+                                    ${severityDisplay}
                                 </span>
                             </div>
                         </div>
@@ -3117,7 +3217,7 @@
                 document.getElementById('editExpenseCategory').value = expense.category || 'other';
                 document.getElementById('editExpenseDesc').value = expense.description || '';
                 document.getElementById('editExpenseAmount').value = expense.amount || 0;
-                document.getElementById('editExpenseDate').value = expense.date || new Date().toISOString().split('T')[0];
+                document.getElementById('editExpenseDate').value = expense.date || getLocalDateString();
                 document.getElementById('editExpenseReceipt').value = expense.receipt || '';
                 
                 showModal('editExpenseModal');
@@ -3245,13 +3345,17 @@
                 
                 container.innerHTML = milestones.map(milestone => {
                     const cycle = farmData.cycles.find(c => c.id === milestone.cycleId);
+                    const milestoneTypeName = getMilestoneTypeName(milestone.type);
+                    const milestoneStatusClass = getMilestoneStatusClass(milestone.status);
+                    const statusDisplay = milestone.status.replace('_', ' ');
+                    
                     return `
                         <div class="timeline-item">
                             <div class="timeline-date">${milestone.date}</div>
                             <div class="timeline-content">
                                 <div style="display: flex; justify-content: space-between; align-items: start;">
                                     <div>
-                                        <strong>${getMilestoneTypeName(milestone.type)}</strong>
+                                        <strong>${milestoneTypeName}</strong>
                                         ${cycle ? `<div style="color: #666; font-size: 0.9rem;">${cycle.plotName}</div>` : ''}
                                         <div style="margin-top: 5px;">${escapeHtml(milestone.description)}</div>
                                         ${milestone.notes ? `<div style="margin-top: 5px; font-size: 0.9rem; color: #666;">${escapeHtml(milestone.notes)}</div>` : ''}
@@ -3260,8 +3364,8 @@
                                         <button class="btn btn-icon btn-small" onclick="FarmMaster.editMilestone(${milestone.id})" title="Edit">
                                             <i class="fas fa-edit"></i>
                                         </button>
-                                        <span class="status-badge ${getMilestoneStatusClass(milestone.status)}">
-                                            ${milestone.status.replace('_', ' ')}
+                                        <span class="status-badge ${milestoneStatusClass}">
+                                            ${statusDisplay}
                                         </span>
                                     </div>
                                 </div>
@@ -3360,10 +3464,15 @@
                 const remaining = Math.max(0, totalBudget - totalSpent);
                 const utilization = totalBudget > 0 ? Math.round((totalSpent / totalBudget) * 100) : 0;
                 
-                document.getElementById('budgetTotal').textContent = formatCurrency(totalBudget);
-                document.getElementById('budgetSpent').textContent = formatCurrency(totalSpent);
-                document.getElementById('budgetRemaining').textContent = formatCurrency(remaining);
-                document.getElementById('budgetUtilization').textContent = `${utilization}%`;
+                const budgetTotalEl = document.getElementById('budgetTotal');
+                const budgetSpentEl = document.getElementById('budgetSpent');
+                const budgetRemainingEl = document.getElementById('budgetRemaining');
+                const budgetUtilizationEl = document.getElementById('budgetUtilization');
+                
+                if (budgetTotalEl) budgetTotalEl.textContent = formatCurrency(totalBudget);
+                if (budgetSpentEl) budgetSpentEl.textContent = formatCurrency(totalSpent);
+                if (budgetRemainingEl) budgetRemainingEl.textContent = formatCurrency(remaining);
+                if (budgetUtilizationEl) budgetUtilizationEl.textContent = `${utilization}%`;
             }
 
             function loadBudgetCategories() {
@@ -3401,10 +3510,11 @@
                     const remaining = Math.max(0, data.budgeted - data.spent);
                     const percentUsed = data.budgeted > 0 ? Math.round((data.spent / data.budgeted) * 100) : 0;
                     const percentClass = percentUsed > 90 ? 'status-danger' : percentUsed > 70 ? 'status-warning' : 'status-active';
+                    const categoryName = cat.charAt(0).toUpperCase() + cat.slice(1);
                     
                     return `
                         <tr>
-                            <td>${cat.charAt(0).toUpperCase() + cat.slice(1)}</td>
+                            <td>${categoryName}</td>
                             <td>${formatCurrency(data.budgeted)}</td>
                             <td>${formatCurrency(data.spent)}</td>
                             <td>${formatCurrency(remaining)}</td>
@@ -3415,68 +3525,12 @@
             }
 
             function loadBudgetItems() {
-                const container = document.getElementById('budgetItemsList');
-                if (!container) return;
-                
-                if (!farmData.budget.length) {
-                    container.innerHTML = `
-                        <div style="text-align: center; padding: 20px; color: #666;">
-                            No budget items added yet
-                        </div>
-                    `;
-                    return;
-                }
-                
-                container.innerHTML = farmData.budget.map(item => {
-                    const cycle = item.cycleId ? farmData.cycles.find(c => c.id === item.cycleId) : null;
-                    const spent = farmData.expenses
-                        .filter(e => e.cycleId === item.cycleId && e.category === item.category)
-                        .reduce((sum, exp) => sum + exp.amount, 0);
-                    const remaining = Math.max(0, item.total - spent);
-                    const percentUsed = item.total > 0 ? Math.round((spent / item.total) * 100) : 0;
-                    
-                    return `
-                        <div style="padding: 15px; border-bottom: 1px solid #eee;">
-                            <div style="display: flex; justify-content: space-between; align-items: start;">
-                                <div style="flex: 1;">
-                                    <div style="display: flex; justify-content: space-between; align-items: start;">
-                                        <div>
-                                            <strong>${escapeHtml(item.name)}</strong>
-                                            <div style="color: #666; font-size: 0.9rem;">
-                                                ${item.category} • ${item.quantity} ${item.unit}
-                                                ${cycle ? ` • ${cycle.plotName}` : ''}
-                                            </div>
-                                        </div>
-                                        <div style="display: flex; gap: 5px;">
-                                            <button class="btn btn-icon btn-small" onclick="FarmMaster.editBudgetItem(${item.id})" title="Edit">
-                                                <i class="fas fa-edit"></i>
-                                            </button>
-                                            <button class="btn btn-icon btn-small" onclick="FarmMaster.deleteBudgetItem(${item.id})" title="Delete" style="color: var(--danger);">
-                                                <i class="fas fa-trash"></i>
-                                            </button>
-                                        </div>
-                                    </div>
-                                    <div style="margin-top: 10px;">
-                                        <div style="display: flex; justify-content: space-between; font-size: 0.9rem;">
-                                            <span>Budgeted: ${formatCurrency(item.total)}</span>
-                                            <span>Spent: ${formatCurrency(spent)}</span>
-                                            <span>Remaining: ${formatCurrency(remaining)}</span>
-                                            <span class="status-badge ${percentUsed > 90 ? 'status-danger' : percentUsed > 70 ? 'status-warning' : 'status-active'}">
-                                                ${percentUsed}% used
-                                            </span>
-                                        </div>
-                                        ${item.notes ? `<div style="margin-top: 5px; font-size: 0.8rem; color: #666;">${escapeHtml(item.notes)}</div>` : ''}
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    `;
-                }).join('');
+                filterBudgetItems(); // Use filtered version
             }
 
             function filterBudgetItems() {
-                const search = document.getElementById('budgetSearch').value.toLowerCase();
-                const filter = document.getElementById('budgetFilter').value;
+                const search = document.getElementById('budgetSearch')?.value.toLowerCase() || '';
+                const filter = document.getElementById('budgetFilter')?.value || 'all';
                 
                 let filtered = [...farmData.budget];
                 
@@ -3510,51 +3564,60 @@
                     return;
                 }
                 
-                container.innerHTML = filtered.map(item => {
+                // Use DocumentFragment for better performance
+                const fragment = document.createDocumentFragment();
+                
+                filtered.forEach(item => {
                     const cycle = item.cycleId ? farmData.cycles.find(c => c.id === item.cycleId) : null;
                     const spent = farmData.expenses
                         .filter(e => e.cycleId === item.cycleId && e.category === item.category)
                         .reduce((sum, exp) => sum + exp.amount, 0);
                     const remaining = Math.max(0, item.total - spent);
                     const percentUsed = item.total > 0 ? Math.round((spent / item.total) * 100) : 0;
+                    const percentClass = percentUsed > 90 ? 'status-danger' : percentUsed > 70 ? 'status-warning' : 'status-active';
                     
-                    return `
-                        <div style="padding: 15px; border-bottom: 1px solid #eee;">
-                            <div style="display: flex; justify-content: space-between; align-items: start;">
-                                <div style="flex: 1;">
-                                    <div style="display: flex; justify-content: space-between; align-items: start;">
-                                        <div>
-                                            <strong>${escapeHtml(item.name)}</strong>
-                                            <div style="color: #666; font-size: 0.9rem;">
-                                                ${item.category} • ${item.quantity} ${item.unit}
-                                                ${cycle ? ` • ${cycle.plotName}` : ''}
-                                            </div>
-                                        </div>
-                                        <div style="display: flex; gap: 5px;">
-                                            <button class="btn btn-icon btn-small" onclick="FarmMaster.editBudgetItem(${item.id})" title="Edit">
-                                                <i class="fas fa-edit"></i>
-                                            </button>
-                                            <button class="btn btn-icon btn-small" onclick="FarmMaster.deleteBudgetItem(${item.id})" title="Delete" style="color: var(--danger);">
-                                                <i class="fas fa-trash"></i>
-                                            </button>
+                    const div = document.createElement('div');
+                    div.style.padding = '15px';
+                    div.style.borderBottom = '1px solid #eee';
+                    div.innerHTML = `
+                        <div style="display: flex; justify-content: space-between; align-items: start;">
+                            <div style="flex: 1;">
+                                <div style="display: flex; justify-content: space-between; align-items: start;">
+                                    <div>
+                                        <strong>${escapeHtml(item.name)}</strong>
+                                        <div style="color: #666; font-size: 0.9rem;">
+                                            ${item.category} • ${item.quantity} ${item.unit}
+                                            ${cycle ? ` • ${cycle.plotName}` : ''}
                                         </div>
                                     </div>
-                                    <div style="margin-top: 10px;">
-                                        <div style="display: flex; justify-content: space-between; font-size: 0.9rem;">
-                                            <span>Budgeted: ${formatCurrency(item.total)}</span>
-                                            <span>Spent: ${formatCurrency(spent)}</span>
-                                            <span>Remaining: ${formatCurrency(remaining)}</span>
-                                            <span class="status-badge ${percentUsed > 90 ? 'status-danger' : percentUsed > 70 ? 'status-warning' : 'status-active'}">
-                                                ${percentUsed}% used
-                                            </span>
-                                        </div>
-                                        ${item.notes ? `<div style="margin-top: 5px; font-size: 0.8rem; color: #666;">${escapeHtml(item.notes)}</div>` : ''}
+                                    <div style="display: flex; gap: 5px;">
+                                        <button class="btn btn-icon btn-small" onclick="FarmMaster.editBudgetItem(${item.id})" title="Edit">
+                                            <i class="fas fa-edit"></i>
+                                        </button>
+                                        <button class="btn btn-icon btn-small" onclick="FarmMaster.deleteBudgetItem(${item.id})" title="Delete" style="color: var(--danger);">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
                                     </div>
+                                </div>
+                                <div style="margin-top: 10px;">
+                                    <div style="display: flex; justify-content: space-between; font-size: 0.9rem;">
+                                        <span>Budgeted: ${formatCurrency(item.total)}</span>
+                                        <span>Spent: ${formatCurrency(spent)}</span>
+                                        <span>Remaining: ${formatCurrency(remaining)}</span>
+                                        <span class="status-badge ${percentClass}">
+                                            ${percentUsed}% used
+                                        </span>
+                                    </div>
+                                    ${item.notes ? `<div style="margin-top: 5px; font-size: 0.8rem; color: #666;">${escapeHtml(item.notes)}</div>` : ''}
                                 </div>
                             </div>
                         </div>
                     `;
-                }).join('');
+                    fragment.appendChild(div);
+                });
+                
+                container.innerHTML = '';
+                container.appendChild(fragment);
             }
 
             function calculateBudgetTotal() {
@@ -3625,7 +3688,7 @@
                 if (!item) return;
                 
                 document.getElementById('editBudgetId').value = item.id;
-                document.getElementById('editBud getName').value = item.name || '';
+                document.getElementById('editBudgetName').value = item.name || '';
                 document.getElementById('editBudgetCategory').value = item.category || '';
                 document.getElementById('editBudgetQty').value = item.quantity || 1;
                 document.getElementById('editBudgetUnit').value = item.unit || '';
@@ -3646,7 +3709,7 @@
                     return;
                 }
                 
-                const name = document.getElementById('editBud getName').value;
+                const name = document.getElementById('editBudgetName').value;
                 const category = document.getElementById('editBudgetCategory').value;
                 const quantity = parseFloat(document.getElementById('editBudgetQty').value) || 1;
                 const unit = document.getElementById('editBudgetUnit').value;
@@ -4080,6 +4143,7 @@
                     const statusClass = grant.status === 'approved' || grant.status === 'funded' ? 'status-success' : 
                                       grant.status === 'rejected' ? 'status-danger' : 
                                       grant.status === 'under_review' ? 'status-warning' : 'status-pending';
+                    const statusDisplay = grant.status.replace('_', ' ');
                     
                     return `
                         <div style="padding: 15px; border-bottom: 1px solid #eee;">
@@ -4093,7 +4157,7 @@
                                 </div>
                                 <div>
                                     <span class="status-badge ${statusClass}">
-                                        ${grant.status.replace('_', ' ')}
+                                        ${statusDisplay}
                                     </span>
                                 </div>
                             </div>
@@ -4189,10 +4253,15 @@
                 const totalInvestments = farmData.investors.reduce((sum, investor) => sum + investor.amount, 0);
                 const totalFinancing = totalLoans + totalGrants + totalInvestments;
                 
-                document.getElementById('totalLoans').textContent = formatCurrency(totalLoans);
-                document.getElementById('totalGrants').textContent = formatCurrency(totalGrants);
-                document.getElementById('totalInvestments').textContent = formatCurrency(totalInvestments);
-                document.getElementById('totalFinancing').textContent = formatCurrency(totalFinancing);
+                const totalLoansEl = document.getElementById('totalLoans');
+                const totalGrantsEl = document.getElementById('totalGrants');
+                const totalInvestmentsEl = document.getElementById('totalInvestments');
+                const totalFinancingEl = document.getElementById('totalFinancing');
+                
+                if (totalLoansEl) totalLoansEl.textContent = formatCurrency(totalLoans);
+                if (totalGrantsEl) totalGrantsEl.textContent = formatCurrency(totalGrants);
+                if (totalInvestmentsEl) totalInvestmentsEl.textContent = formatCurrency(totalInvestments);
+                if (totalFinancingEl) totalFinancingEl.textContent = formatCurrency(totalFinancing);
             }
 
             function generateFinancingReport() {
@@ -4219,39 +4288,7 @@
             }
 
             function loadInventoryTable() {
-                const container = document.getElementById('inventoryTable');
-                if (!container) return;
-                
-                if (!farmData.inventory.length) {
-                    container.innerHTML = `
-                        <tr>
-                            <td colspan="7" style="text-align: center; padding: 20px; color: #666;">
-                                No inventory items yet
-                            </td>
-                        </tr>
-                    `;
-                    return;
-                }
-                
-                container.innerHTML = farmData.inventory.map(item => {
-                    const status = item.currentStock <= (item.reorderLevel || 0) ? 'Low Stock' : 'In Stock';
-                    const statusClass = item.currentStock <= (item.reorderLevel || 0) ? 'status-danger' : 'status-active';
-                    
-                    return `
-                        <tr>
-                            <td>${escapeHtml(item.name)}</td>
-                            <td>${item.category}</td>
-                            <td>${item.currentStock}</td>
-                            <td>${item.unit}</td>
-                            <td>${item.reorderLevel || 'N/A'}</td>
-                            <td><span class="status-badge ${statusClass}">${status}</span></td>
-                            <td>
-                                <button class="btn btn-small" onclick="FarmMaster.updateStock(${item.id}, 1)">+</button>
-                                <button class="btn btn-small" onclick="FarmMaster.updateStock(${item.id}, -1)">-</button>
-                            </td>
-                        </tr>
-                    `;
-                }).join('');
+                filterInventory(); // Use filtered version
             }
 
             function loadInventoryAlerts() {
@@ -4363,8 +4400,8 @@
             }
 
             function filterInventory() {
-                const search = document.getElementById('inventorySearch').value.toLowerCase();
-                const category = document.getElementById('inventoryCategoryFilter').value;
+                const search = document.getElementById('inventorySearch')?.value.toLowerCase() || '';
+                const category = document.getElementById('inventoryCategoryFilter')?.value || '';
                 
                 const filtered = farmData.inventory.filter(item => {
                     const matchesSearch = item.name.toLowerCase().includes(search);
@@ -4386,25 +4423,31 @@
                     return;
                 }
                 
-                container.innerHTML = filtered.map(item => {
+                // Use DocumentFragment for better performance
+                const fragment = document.createDocumentFragment();
+                
+                filtered.forEach(item => {
                     const status = item.currentStock <= (item.reorderLevel || 0) ? 'Low Stock' : 'In Stock';
                     const statusClass = item.currentStock <= (item.reorderLevel || 0) ? 'status-danger' : 'status-active';
                     
-                    return `
-                        <tr>
-                            <td>${escapeHtml(item.name)}</td>
-                            <td>${item.category}</td>
-                            <td>${item.currentStock}</td>
-                            <td>${item.unit}</td>
-                            <td>${item.reorderLevel || 'N/A'}</td>
-                            <td><span class="status-badge ${statusClass}">${status}</span></td>
-                            <td>
-                                <button class="btn btn-small" onclick="FarmMaster.updateStock(${item.id}, 1)">+</button>
-                                <button class="btn btn-small" onclick="FarmMaster.updateStock(${item.id}, -1)">-</button>
-                            </td>
-                        </tr>
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${escapeHtml(item.name)}</td>
+                        <td>${item.category}</td>
+                        <td>${item.currentStock}</td>
+                        <td>${item.unit}</td>
+                        <td>${item.reorderLevel || 'N/A'}</td>
+                        <td><span class="status-badge ${statusClass}">${status}</span></td>
+                        <td>
+                            <button class="btn btn-small" onclick="FarmMaster.updateStock(${item.id}, 1)">+</button>
+                            <button class="btn btn-small" onclick="FarmMaster.updateStock(${item.id}, -1)">-</button>
+                        </td>
                     `;
-                }).join('');
+                    fragment.appendChild(row);
+                });
+                
+                container.innerHTML = '';
+                container.appendChild(fragment);
             }
 
             // ====================
@@ -4449,13 +4492,14 @@
                 `).join('');
                 
                 // Update present count
-                const today = new Date().toISOString().split('T')[0];
+                const today = getLocalDateString();
                 const presentToday = farmData.attendance.filter(a => a.date === today && a.status === 'present').length;
-                document.getElementById('workersPresent').textContent = presentToday;
+                const workersPresentEl = document.getElementById('workersPresent');
+                if (workersPresentEl) workersPresentEl.textContent = presentToday;
             }
 
             function loadAttendance() {
-                const date = document.getElementById('attendanceDate').value;
+                const date = document.getElementById('attendanceDate')?.value || getLocalDateString();
                 const container = document.getElementById('attendanceTable');
                 if (!container) return;
                 
@@ -4557,7 +4601,7 @@
             }
 
             function loadTasks() {
-                const today = new Date().toISOString().split('T')[0];
+                const today = getLocalDateString();
                 const todayTasks = farmData.tasks.filter(t => t.date === today);
                 const container = document.getElementById('tasksList');
                 
@@ -4647,22 +4691,27 @@
                 const container = document.getElementById('marketPricesGrid');
                 if (!container) return;
                 
-                container.innerHTML = prices.map(price => `
-                    <div class="worker-card">
-                        <h4>${price.crop}</h4>
-                        <div style="font-size: 1.5rem; font-weight: bold; color: var(--primary); margin: 10px 0;">
-                            ${price.price}
+                container.innerHTML = prices.map(price => {
+                    const trendClass = price.trend === 'up' ? 'status-active' : price.trend === 'down' ? 'status-danger' : 'status-warning';
+                    const trendSymbol = price.trend === 'up' ? '↗ Rising' : price.trend === 'down' ? '↘ Falling' : '→ Stable';
+                    
+                    return `
+                        <div class="worker-card">
+                            <h4>${price.crop}</h4>
+                            <div style="font-size: 1.5rem; font-weight: bold; color: var(--primary); margin: 10px 0;">
+                                ${price.price}
+                            </div>
+                            <div style="color: #666; font-size: 0.9rem; margin-bottom: 5px;">
+                                <i class="fas fa-map-marker-alt"></i> ${price.location}
+                            </div>
+                            <div style="font-size: 0.8rem;">
+                                <span class="status-badge ${trendClass}">
+                                    ${trendSymbol}
+                                </span>
+                            </div>
                         </div>
-                        <div style="color: #666; font-size: 0.9rem; margin-bottom: 5px;">
-                            <i class="fas fa-map-marker-alt"></i> ${price.location}
-                        </div>
-                        <div style="font-size: 0.8rem;">
-                            <span class="status-badge ${price.trend === 'up' ? 'status-active' : price.trend === 'down' ? 'status-danger' : 'status-warning'}">
-                                ${price.trend === 'up' ? '↗ Rising' : price.trend === 'down' ? '↘ Falling' : '→ Stable'}
-                            </span>
-                        </div>
-                    </div>
-                `).join('');
+                    `;
+                }).join('');
             }
 
             function loadSales() {
@@ -4747,7 +4796,7 @@
                     price,
                     total: qty * price,
                     customer: customer.trim(),
-                    date: new Date().toISOString().split('T')[0],
+                    date: getLocalDateString(),
                     timestamp: new Date().toISOString()
                 };
                 
@@ -4792,8 +4841,11 @@
                 const totalProduction = farmData.cycles.reduce((sum, cycle) => sum + (cycle.yield || 0), 0);
                 const averageYield = farmData.cycles.length > 0 ? totalProduction / farmData.cycles.length : 0;
                 
-                document.getElementById('totalProduction').textContent = `${totalProduction} kg`;
-                document.getElementById('averageYield').textContent = `${averageYield.toFixed(2)} kg/ha`;
+                const totalProductionEl = document.getElementById('totalProduction');
+                const averageYieldEl = document.getElementById('averageYield');
+                
+                if (totalProductionEl) totalProductionEl.textContent = `${totalProduction} kg`;
+                if (averageYieldEl) averageYieldEl.textContent = `${averageYield.toFixed(2)} kg/ha`;
             }
 
             function loadFinancialReports() {
@@ -4841,12 +4893,12 @@
                 switch(format) {
                     case 'json':
                         blob = new Blob([JSON.stringify(farmData, null, 2)], { type: 'application/json' });
-                        filename = `mosehleng_farm_data_${new Date().toISOString().split('T')[0]}.json`;
+                        filename = `mosehleng_farm_data_${getLocalDateString()}.json`;
                         break;
                     case 'csv':
                         const csv = convertToCSV();
                         blob = new Blob([csv], { type: 'text/csv' });
-                        filename = `mosehleng_farm_data_${new Date().toISOString().split('T')[0]}.csv`;
+                        filename = `mosehleng_farm_data_${getLocalDateString()}.csv`;
                         break;
                     case 'pdf':
                         showNotification('PDF export would generate a formatted report', 'info');
@@ -4944,6 +4996,7 @@
                 const notification = document.createElement('div');
                 notification.className = `notification notification-${type}`;
                 notification.textContent = message;
+                notification.setAttribute('aria-live', 'polite');
                 document.body.appendChild(notification);
                 
                 setTimeout(() => {
@@ -4951,16 +5004,6 @@
                         notification.parentNode.removeChild(notification);
                     }
                 }, 3000);
-            }
-
-            function formatCurrency(amount) {
-                return `R ${Number(amount).toLocaleString('en-ZA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-            }
-
-            function escapeHtml(text) {
-                const div = document.createElement('div');
-                div.textContent = text;
-                return div.innerHTML;
             }
 
             // Public API
